@@ -3,36 +3,83 @@ import {
   allocateWorkers,
   createValidationPlan,
   parseValidationProfile,
-  parseWorkerBudget,
+  resolveWorkerBudget,
   runValidationPlan,
+  type ValidationProfileName,
   type ValidationTaskExecutor,
 } from './validation-runner.ts';
 
 describe('validation runner', () => {
-  test.each([1, 4, 24])(
-    'uses detected parallelism %i as the default worker budget',
-    (detectedParallelism) => {
-      expect(parseWorkerBudget(undefined, detectedParallelism)).toBe(
-        detectedParallelism,
-      );
+  test.each([
+    [1, 1],
+    [4, 2],
+    [24, 12],
+  ])(
+    'uses 50%% of detected parallelism %i for the local full worker budget',
+    (detectedParallelism, expectedWorkerBudget) => {
+      expect(
+        resolveWorkerBudget(undefined, 'full', false, detectedParallelism),
+      ).toEqual({
+        workerBudget: expectedWorkerBudget,
+        source: 'local full default (50%)',
+      });
     },
   );
 
-  test('prefers a valid configured worker budget and rejects invalid values', () => {
-    expect(parseWorkerBudget('2', 24)).toBe(2);
-    expect(() => parseWorkerBudget('0')).toThrow(
-      'ISSUARY_TEST_WORKERS must be a positive integer',
-    );
-    expect(() => parseWorkerBudget('-1')).toThrow(
-      'ISSUARY_TEST_WORKERS must be a positive integer',
-    );
-    expect(() => parseWorkerBudget('1.5')).toThrow(
-      'ISSUARY_TEST_WORKERS must be a positive integer',
-    );
-    expect(() => parseWorkerBudget('invalid')).toThrow(
-      'ISSUARY_TEST_WORKERS must be a positive integer',
-    );
+  test('uses all detected parallelism for local quick validation', () => {
+    expect(resolveWorkerBudget(undefined, 'quick', false, 24)).toEqual({
+      workerBudget: 24,
+      source: 'local quick default (100%)',
+    });
   });
+
+  test.each<ValidationProfileName>(['quick', 'full'])(
+    'uses all detected parallelism for the %s profile in CI',
+    (profile) => {
+      expect(resolveWorkerBudget(undefined, profile, true, 24)).toEqual({
+        workerBudget: 24,
+        source: 'CI default (100%)',
+      });
+    },
+  );
+
+  test('prefers a configured worker budget in every context', () => {
+    const contexts: Array<{
+      profile: ValidationProfileName;
+      isCi: boolean;
+    }> = [
+      { profile: 'quick', isCi: false },
+      { profile: 'quick', isCi: true },
+      { profile: 'full', isCi: false },
+      { profile: 'full', isCi: true },
+    ];
+
+    for (const { profile, isCi } of contexts) {
+      expect(resolveWorkerBudget('2', profile, isCi, 24)).toEqual({
+        workerBudget: 2,
+        source: 'ISSUARY_TEST_WORKERS',
+      });
+    }
+  });
+
+  test.each(['0', '-1', '1.5', 'invalid'])(
+    'rejects invalid configured worker budget %s',
+    (configuredWorkerBudget) => {
+      expect(() =>
+        resolveWorkerBudget(configuredWorkerBudget, 'full', false),
+      ).toThrow('ISSUARY_TEST_WORKERS must be a positive integer');
+    },
+  );
+
+  test.each([1, 4, 24])(
+    'uses detected parallelism %i as the CI default worker budget',
+    (detectedParallelism) => {
+      expect(
+        resolveWorkerBudget(undefined, 'full', true, detectedParallelism)
+          .workerBudget,
+      ).toBe(detectedParallelism);
+    },
+  );
 
   test('parses supported validation profiles', () => {
     expect(parseValidationProfile(undefined)).toBe('quick');
