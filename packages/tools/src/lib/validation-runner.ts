@@ -20,6 +20,15 @@ export type ValidationTaskExecutor = (
   workers: number,
 ) => Promise<void>;
 
+export interface WorkerBudgetResolution {
+  workerBudget: number;
+  source:
+    | 'ISSUARY_TEST_WORKERS'
+    | 'local full default (50%)'
+    | 'CI default (100%)'
+    | 'local quick default (100%)';
+}
+
 const serverTask: ValidationTask = {
   name: 'server',
   weight: 5,
@@ -91,16 +100,30 @@ function standaloneTask(script: 'test' | 'test:prepared') {
   } satisfies ValidationTask;
 }
 
-export function parseWorkerBudget(
-  value: string | undefined,
+export function resolveWorkerBudget(
+  configuredValue: string | undefined,
+  profile: ValidationProfileName,
+  isCi: boolean,
   detectedParallelism = availableParallelism(),
-): number {
-  if (value === undefined) return detectedParallelism;
-  const workerBudget = Number(value);
+): WorkerBudgetResolution {
+  if (configuredValue === undefined) {
+    if (profile === 'full' && !isCi) {
+      return {
+        workerBudget: Math.max(1, Math.floor(detectedParallelism * 0.5)),
+        source: 'local full default (50%)',
+      };
+    }
+    return {
+      workerBudget: detectedParallelism,
+      source: isCi ? 'CI default (100%)' : 'local quick default (100%)',
+    };
+  }
+
+  const workerBudget = Number(configuredValue);
   if (!Number.isInteger(workerBudget) || workerBudget <= 0) {
     throw new Error('ISSUARY_TEST_WORKERS must be a positive integer');
   }
-  return workerBudget;
+  return { workerBudget, source: 'ISSUARY_TEST_WORKERS' };
 }
 
 export function parseValidationProfile(
